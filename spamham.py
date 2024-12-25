@@ -9,7 +9,9 @@ from sklearn.naive_bayes import MultinomialNB
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report
-import gradio as gr
+from google.colab import files
+import ipywidgets as widgets
+from IPython.display import display, clear_output
 import io
 
 # Download necessary nltk resources
@@ -55,7 +57,7 @@ data['ProcessedText'] = data['EmailText'].apply(preprocess_text)
 vectorizer = TfidfVectorizer(max_features=5000)
 X = vectorizer.fit_transform(data['ProcessedText']).toarray()
 
-# Target variable (assuming 'spam' column contains spam/ham labels)
+# Target variable (assuming 'Label' column contains spam/ham labels)
 y = data['spam']
 
 # Split the data
@@ -66,20 +68,30 @@ nb_model = MultinomialNB().fit(X_train, y_train)
 svm_model = SVC(kernel='linear').fit(X_train, y_train)
 rf_model = RandomForestClassifier(n_estimators=100, random_state=42).fit(X_train, y_train)
 
+# Evaluation function
+def evaluate_model(model, X_test, y_test, model_name):
+    y_pred = model.predict(X_test)
+    print(f"{model_name} Accuracy: {accuracy_score(y_test, y_pred)}")
+    print(classification_report(y_test, y_pred))
+
+evaluate_model(nb_model, X_test, y_test, "Naive Bayes")
+evaluate_model(svm_model, X_test, y_test, "SVM")
+evaluate_model(rf_model, X_test, y_test, "Random Forest")
+
 # Define classification function for single email
 def classify_text_input(text):
     processed_text = preprocess_text(text)
     vectorized_text = vectorizer.transform([processed_text]).toarray()
     predictions = {
-        "Naive Bayes": "Spam" if nb_model.predict(vectorized_text)[0] == 1 else "Ham",
-        "SVM": "Spam" if svm_model.predict(vectorized_text)[0] == 1 else "Ham",
-        "Random Forest": "Spam" if rf_model.predict(vectorized_text)[0] == 1 else "Ham",
+        "Naive Bayes": nb_model.predict(vectorized_text)[0],
+        "SVM": svm_model.predict(vectorized_text)[0],
+        "Random Forest": rf_model.predict(vectorized_text)[0],
     }
-    return predictions
+    print("Predictions for the input text:", predictions)
 
 # Define classification function for multiple emails
 def classify_csv_file(file):
-    data = pd.read_csv(file.name)
+    data = pd.read_csv(file)
 
     # Check and rename the text column to 'EmailText' if it's not present
     if 'EmailText' not in data.columns:
@@ -90,8 +102,10 @@ def classify_csv_file(file):
         text_column = max(potential_text_columns, key=potential_text_columns.get)
         data.rename(columns={text_column: 'EmailText'}, inplace=True)
 
+    # Proceed only if 'EmailText' column is correctly identified
     if 'EmailText' not in data.columns:
-        return "Could not identify a suitable text column."
+        print("Could not identify a suitable text column.")
+        return
 
     # Preprocess and classify
     data['ProcessedText'] = data['EmailText'].apply(preprocess_text)
@@ -106,18 +120,69 @@ def classify_csv_file(file):
     data['RandomForestPrediction'] = rf_pred
     data['FinalPrediction'] = data[['NaiveBayesPrediction', 'SVMPrediction', 'RandomForestPrediction']].mode(axis=1)[0]
 
-    return data[['EmailText', 'NaiveBayesPrediction', 'SVMPrediction', 'RandomForestPrediction', 'FinalPrediction']]
+    display(data[['EmailText', 'NaiveBayesPrediction', 'SVMPrediction', 'RandomForestPrediction', 'FinalPrediction']])
 
-# Gradio interface
-interface = gr.Interface(
-    fn=lambda text, file: classify_text_input(text) if text else classify_csv_file(file),
-    inputs=[
-        gr.inputs.Textbox(label="Enter Email Text (leave blank for file upload)", placeholder="Type your email content here..."),
-        gr.inputs.File(label="Upload CSV File (leave blank for single email text)")
-    ],
-    outputs="json",
-    title="Spam/Ham Email Classifier",
-    description="Classify an email or a batch of emails as Spam or Ham using three different models."
+    # Display spam and ham counts
+    spam_count = (data['FinalPrediction'] == 1).sum()  # Assuming 1 is 'spam'
+    ham_count = (data['FinalPrediction'] == 0).sum()  # Assuming 0 is 'ham'
+    total_mails = len(data)
+    print(f"\nOut of {total_mails} emails:")
+    print(f"Spam count: {spam_count}")
+    print(f"Ham count: {ham_count}")
+
+# UI Setup
+option_selector = widgets.RadioButtons(
+    options=['Single Email', 'Multiple Emails'],
+    description='Choose Option:',
+    disabled=False
 )
 
-interface.launch()
+text_input = widgets.Textarea(
+    placeholder='Enter the email text to classify...',
+    description='Email Text:',
+    layout=widgets.Layout(width='100%', height='100px'),
+    visible=False
+)
+
+classify_button = widgets.Button(description="Classify Email", visible=False)
+
+upload_button = widgets.FileUpload(
+    accept='.csv',
+    multiple=False,
+    description='Upload CSV',
+    visible=False
+)
+
+# Display option selector
+def on_option_change(change):
+    clear_output()
+    display(option_selector)
+    if change['new'] == 'Single Email':
+        # Show the text input and classify button for single email
+        text_input.visible = True
+        classify_button.visible = True
+        upload_button.visible = False
+        display(text_input, classify_button)
+    elif change['new'] == 'Multiple Emails':
+        # Show the upload button for multiple emails
+        text_input.visible = False
+        classify_button.visible = False
+        upload_button.visible = True
+        display(upload_button)
+
+# Single email classification button action
+def on_classify_single(b):
+    classify_text_input(text_input.value)
+
+# Multiple email file upload action
+def on_file_upload(change):
+    file = next(iter(upload_button.value.values()))['content']
+    classify_csv_file(io.BytesIO(file))
+
+# Bind actions
+option_selector.observe(on_option_change, names='value')
+classify_button.on_click(on_classify_single)
+upload_button.observe(on_file_upload, names='value')
+
+# Display initial option selector
+display(option_selector)
